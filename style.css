@@ -39,3 +39,10 @@ div.o{box-shadow:0 6px 0 #0006}
 @keyframes pulse{50%{transform:scale(1.03)}}
 @media(max-width:560px){.opts{grid-template-columns:1fr}.row2{grid-template-columns:1fr}}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+button.sm{width:auto;padding:8px 14px;margin:0 0 0 8px;box-shadow:none;font-size:15px}
+.orow{display:flex;gap:10px;align-items:center}
+.orow input[type=radio]{width:24px;height:24px;margin:10px 0 0;accent-color:var(--g);flex:none}
+.lobby{display:grid;grid-template-columns:auto 1fr;gap:24px;align-items:center}
+.qr svg{display:block;width:min(70vw,300px);height:auto;border-radius:16px;box-shadow:0 0 40px #22d3ee55}
+summary{cursor:pointer;font-weight:800}
+@media(max-width:700px){.lobby{grid-template-columns:1fr;justify-items:center}}
