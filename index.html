@@ -42,7 +42,7 @@ function draw() {
 }
 function build(me, s) {
   const p = s.phase; let h = '';
-  if (!me) h = `<div class="card pop"><h2>Join the game</h2><input id="cd" inputmode="numeric" maxlength="4" placeholder="Game code" value="${esc(S.code || '')}"><input id="nm" maxlength="20" placeholder="Your name" autocomplete="off"><button id="go">Join</button><p id="err" class="err"></p></div>`;
+  if (!me) h = `<div class="card pop"><h2>Join the game</h2><input id="cd" inputmode="numeric" maxlength="4" placeholder="Game code" value="${esc(S.code || new URLSearchParams(location.search).get('c') || '')}"><input id="nm" maxlength="20" placeholder="Your name" autocomplete="off"><button id="go">Join</button><p id="err" class="err"></p></div>`;
   else if (p === 'lobby') h = `<div class="card pop center"><h2>You are in, ${esc(me.name)}!</h2><p>Waiting for the host to start. Get your thumbs ready.</p></div><div class="card"><b>Players</b><div id="lb"></div></div>`;
   else if (p === 'question' || p === 'reveal') {
     const O = s.opts.map((t, i) => p === 'reveal'
