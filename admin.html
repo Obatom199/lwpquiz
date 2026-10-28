@@ -1,0 +1,130 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Fastest Fingers Admin</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bungee&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css"></head><body>
+<header><h1 class="logo">Fastest Fingers</h1><div class="tag">Admin Control Room</div></header>
+<main id="app"></main>
+<script type="module">
+import {ready,sb,S,$,esc,sync,srv,listen,board,players,setup,A,QTIME,REVEAL,MAXPTS,MINPTS} from './shared.js';
+let user = null, last = '', QS = [], qiH = -1, stH = null, timer;
+const sample = `Who built the ark? | Moses | Noah | Abraham | David | 2
+How many disciples did Jesus choose? | 7 | 10 | 12 | 40 | 3
+David defeated Goliath with a sword. | True | False | 2
+Which book comes right after Psalms? | Proverbs | Job | Isaiah | Genesis | 1`;
+
+const acts = {
+  async login() {
+    const { error } = await sb.auth.signInWithPassword({ email: $('#em').value.trim(), password: $('#pw').value });
+    if (error) return $('#err').textContent = error.message;
+    boot();
+  },
+  async out() { await sb.auth.signOut(); location.reload(); },
+  ai() { gen(false); },
+  surprise() { gen(true); },
+  async create() {
+    const qs = parse($('#qs').value);
+    if (!qs) return $('#err').textContent = 'Check each line: question | option | option | number of the correct option';
+    localStorage.qtext = $('#qs').value; QS = qs;
+    let code = '';
+    for (let i = 0; i < 20 && !code; i++) {
+      const c = String(1000 + Math.floor(Math.random() * 9000));
+      const { error } = await sb.from('lq_games').insert({ code: c, state: { phase: 'lobby' } });
+      if (!error) code = c;
+    }
+    if (!code) return $('#err').textContent = 'Could not create the game. Check your Supabase setup and that you are logged in.';
+    await sync(); listen(code, draw);
+  },
+  async start() { await zero(); qiH = -1; next(); },
+  async again() {
+    clearTimeout(timer); qiH = -1; await zero();
+    await sb.from('lq_answers').delete().eq('code', S.code);
+    setState({ phase: 'lobby' });
+  },
+  fresh() { clearTimeout(timer); S.code = ''; S.G = {}; last = ''; draw(); }
+};
+$('#app').onclick = e => { const a = e.target.closest('[data-act]'); if (a && !a.disabled) acts[a.dataset.act](); };
+
+function parse(text) {
+  const qs = text.split('\n').map(l => l.trim()).filter(Boolean).map(l => {
+    const p = l.split('|').map(s => s.trim()), c = parseInt(p.pop()) - 1;
+    return { q: p[0], o: p.slice(1), c };
+  });
+  return qs.length && !qs.some(x => !x.q || x.o.length < 2 || x.o.length > 4 || !(x.c >= 0 && x.c < x.o.length)) ? qs : null;
+}
+async function gen(surprise) {
+  const st = $('#ai'), btns = document.querySelectorAll('[data-act=ai],[data-act=surprise]');
+  btns.forEach(b => b.disabled = true); st.textContent = 'Writing your quiz...';
+  try {
+    const { data } = await sb.auth.getSession();
+    const r = await fetch('/.netlify/functions/generate', { method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + data.session.access_token },
+      body: JSON.stringify({ topic: surprise ? '' : $('#tp').value, count: $('#ct').value, level: $('#lv').value }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || 'The AI helper is not set up yet.');
+    $('#qs').value = j.text; st.textContent = 'Done. Read through the questions and edit anything before creating the game.';
+  } catch (e) { st.textContent = e.message; }
+  btns.forEach(b => b.disabled = false);
+}
+
+/* ---------- game control ---------- */
+const setState = s => { stH = s; return sb.from('lq_games').update({ state: s }).eq('code', S.code); };
+const zero = () => sb.from('lq_players').update({ score: 0, pts: 0, choice: -1 }).eq('code', S.code);
+async function next() {
+  const i = ++qiH;
+  if (i >= QS.length) return setState({ phase: 'done' });
+  const q = QS[i];
+  await sb.from('lq_answers').delete().eq('code', S.code);
+  const start = await srv();
+  await setState({ phase: 'question', qi: i, total: QS.length, q: q.q, opts: q.o, start });
+  timer = setTimeout(reveal, Math.max(0, start + QTIME + 700 - (Date.now() + S.off)));
+}
+async function reveal() {
+  const q = QS[qiH], start = stH.start;
+  const [p, a] = await Promise.all([
+    sb.from('lq_players').select('*').eq('code', S.code),
+    sb.from('lq_answers').select('*').eq('code', S.code)]);
+  const ans = Object.fromEntries((a.data || []).map(x => [x.pid, x]));
+  const rows = (p.data || []).map(pl => {
+    const x = ans[pl.id]; let pts = 0, ch = -1;
+    if (x) {
+      ch = x.choice;
+      const t = Number(x.at) - start;
+      if (ch === q.c && t <= QTIME + 800) pts = Math.round(MAXPTS - (MAXPTS - MINPTS) * Math.min(Math.max(t, 0), QTIME) / QTIME);
+    }
+    return { ...pl, score: pl.score + pts, pts, choice: ch };
+  });
+  if (rows.length) await sb.from('lq_players').upsert(rows);
+  await setState({ ...stH, phase: 'reveal', correct: q.c });
+  timer = setTimeout(next, REVEAL);
+}
+
+/* ---------- screens ---------- */
+function draw() {
+  if (user && S.code && !S.loaded) return;
+  const s = S.G.state || { phase: 'none' }, role = !user ? 'L' : !S.code ? 'S' : 'G';
+  const k = role + (role === 'G' ? s.phase + s.qi : '');
+  if (k !== last) { last = k; build(role, s); }
+  upd(s);
+}
+function build(role, s) {
+  const p = s.phase; let h = '';
+  if (role === 'L') h = '<div class="card pop"><h2>Admin login</h2><input id="em" type="email" placeholder="Email" autocomplete="username"><input id="pw" type="password" placeholder="Password" autocomplete="current-password"><button data-act="login">Log in</button><p id="err" class="err"></p></div>';
+  else if (role === 'S') h = `<div class="card pop"><h2>AI quiz maker</h2><p class="hint">Type a topic, or let the AI surprise you. You can edit every question afterwards.</p><input id="tp" maxlength="200" placeholder="Topic, e.g. Book of Ruth, Women of the Bible, Parables"><div class="row2"><select id="ct"><option>5</option><option selected>10</option><option>15</option></select><select id="lv"><option>Easy</option><option selected>Medium</option><option>Hard</option></select></div><div class="row2"><button class="ai" data-act="ai">Generate with AI</button><button class="ai" data-act="surprise">Surprise me</button></div><p id="ai" class="hint"></p></div><div class="card"><h2>Questions</h2><p class="hint">One per line: question | option | option | ... | number of the correct option</p><textarea id="qs">${esc(localStorage.qtext || sample)}</textarea><button data-act="create">Create game</button><p id="err" class="err"></p><button class="ghost" data-act="out">Log out</button></div>`;
+  else if (p === 'lobby') h = `<div class="card center pop"><div class="tag">Players go to ${esc(location.host)} and enter</div><div class="code">${S.code}</div></div><div class="card" id="names"></div><button data-act="start">Start quiz</button><button class="ghost" data-act="fresh">Back to setup</button>`;
+  else if (p === 'question' || p === 'reveal') {
+    const O = s.opts.map((t, i) => `<div class="o o${i} ${p === 'reveal' ? (i === s.correct ? 'good' : 'dim') : ''}"><b>${A[i]}</b>${esc(t)}</div>`).join('');
+    h = `<div class="head"><span>Question ${s.qi + 1} of ${s.total}</span><span id="cnt"></span></div><div class="bar"><i id="bar"></i></div><h1 class="pop">${esc(s.q)}</h1><div class="opts">${O}</div><div class="msg" id="msg"></div><div class="card"><b>Leaderboard</b><div id="lb"></div></div>`;
+  } else if (p === 'done') h = '<div class="card center pop"><h2>Final results</h2></div><div class="card"><div id="lb"></div></div><button data-act="again">Play again</button><button class="ghost" data-act="fresh">New quiz</button>';
+  $('#app').innerHTML = h;
+}
+function upd(s) {
+  const lb = $('#lb'); if (lb) lb.innerHTML = board(10);
+  const n = $('#names'); if (n) n.innerHTML = `<b>${players().length} joined</b><br>${players().map(x => esc(x.name)).join(', ') || 'Waiting for players...'}`;
+  const m = $('#msg');
+  if (m && s.phase === 'question') m.textContent = Object.keys(S.G.ans || {}).length + ' of ' + players().length + ' have answered';
+  if (m && s.phase === 'reveal') m.textContent = 'Correct answer: ' + A[s.correct];
+}
+async function boot() { user = (await sb.auth.getSession()).data.session; draw(); }
+if (!ready) setup('Open shared.js and paste your Supabase URL and anon key.'); else boot();
+</script></body></html>
