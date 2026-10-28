@@ -1,136 +1,14 @@
-<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>Youth Quiz</title>
-<style>
-:root{--bg:#0f1b3d;--panel:#18295a;--gold:#f2b705;--ink:#fff}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);font:18px/1.4 system-ui,"Segoe UI",Roboto,sans-serif;padding:16px}
-#app{max-width:960px;margin:auto}
-h1{font-size:clamp(26px,5vw,44px);line-height:1.15;margin:.4em 0}
-.card{background:var(--panel);border-radius:12px;padding:16px;margin:14px 0}
-input,textarea,button{font:inherit;width:100%;border:0;border-radius:10px;padding:14px;margin-top:8px}
-textarea{height:210px;font-size:14px;font-family:ui-monospace,Consolas,monospace}
-button{background:var(--gold);color:#1a1a1a;font-weight:800;cursor:pointer}
-button:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px solid #fff}
-.code{font-size:clamp(56px,14vw,120px);font-weight:900;letter-spacing:.12em;color:var(--gold);line-height:1}
-.opts{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:16px 0}
-.o{margin:0;padding:22px 16px;color:#fff;text-align:left;font-size:clamp(18px,3.2vw,28px);border-radius:12px;font-weight:800}
-div.o{display:block}
-.o0{background:#d62839}.o1{background:#1c6fd1}.o2{background:#23913f}.o3{background:#a86b00}
-.dim{opacity:.3}
-.bar{height:12px;background:#0006;border-radius:8px;overflow:hidden}
-.bar i{display:block;height:100%;width:100%;background:var(--gold)}
-.head{display:flex;justify-content:space-between;font-weight:700;margin-bottom:8px}
-.row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #fff2}
-.row:first-child{font-size:1.25em;color:var(--gold)}
-.msg{font-size:1.3em;font-weight:700;min-height:1.6em}
-.err{color:#ffb4b4}
-</style></head><body><div id="app"></div>
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Fastest Fingers</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bungee&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css"></head><body>
+<header><h1 class="logo">Fastest Fingers</h1><div class="tag">Youth Fellowship Live Quiz</div></header>
+<main id="app"></main>
 <script type="module">
-import {createClient} from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/+esm";
+import {ready,sb,S,$,esc,sync,listen,board,players,setup,A} from './shared.js';
+let pid = '', last = '';
 
-// 1. PASTE YOUR SUPABASE SETTINGS HERE (Project settings > API). Use the anon public key only.
-const CONFIG = { url: "https://reohhfxampitibotuwlm.supabase.co", key: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJlb2hoZnhhbXBpdGlib3R1d2xtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTMxODMxNDIsImV4cCI6MjEwODc1OTE0Mn0.LKbhrUrzABV7u6y9Pr1UmkESY0FAEVjDOan2InGdmk8" };
-const QTIME = 12000, REVEAL = 5000, MAXPTS = 1000, MINPTS = 100;
-
-const $ = s => document.querySelector(s);
-const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const host = new URLSearchParams(location.search).has('host');
-const sample = `Who built the ark? | Moses | Noah | Abraham | David | 2
-How many disciples did Jesus choose? | 7 | 10 | 12 | 40 | 3
-David defeated Goliath with a sword. | True | False | 2
-Which book comes right after Psalms? | Proverbs | Job | Isaiah | Genesis | 1`;
-
-let sb, ch, code = '', pid = '', G = {}, off = 0, last = '', QS = [], timer, loaded = false;
-let qiH = -1, stH = null;   // host-only: current question index and state
-
-const players = () => Object.values(G.players || {}).sort((a, b) => b.score - a.score);
-const srv = async () => Number((await sb.rpc('lq_server_ms')).data);
-
-async function sync() {
-  const t0 = Date.now(), s = await srv();
-  off = s - (t0 + Date.now()) / 2;
-}
-async function load() {
-  if (!code) return;
-  const [g, p, a] = await Promise.all([
-    sb.from('lq_games').select('state').eq('code', code).maybeSingle(),
-    sb.from('lq_players').select('*').eq('code', code),
-    sb.from('lq_answers').select('*').eq('code', code)]);
-  G = { state: g.data && g.data.state,
-        players: Object.fromEntries((p.data || []).map(x => [x.id, x])),
-        ans: Object.fromEntries((a.data || []).map(x => [x.pid, x])) };
-  loaded = true; draw();
-}
-function listen() {
-  if (ch) sb.removeChannel(ch);
-  loaded = false;
-  let tm; const kick = () => { clearTimeout(tm); tm = setTimeout(load, 120); };
-  ch = sb.channel('q' + code);
-  ['lq_games', 'lq_players', 'lq_answers'].forEach(t =>
-    ch.on('postgres_changes', { event: '*', schema: 'public', table: t }, kick));
-  ch.subscribe(); load();
-}
-
-/* ---------- host actions ---------- */
-async function create() {
-  const qs = $('#qs').value.split('\n').map(l => l.trim()).filter(Boolean).map(l => {
-    const p = l.split('|').map(s => s.trim()), c = parseInt(p.pop()) - 1;
-    return { q: p[0], o: p.slice(1), c };
-  });
-  if (!qs.length || qs.some(x => !x.q || x.o.length < 2 || x.o.length > 4 || !(x.c >= 0 && x.c < x.o.length)))
-    return $('#err').textContent = 'Check each line: question | option | option | number of the correct option';
-  localStorage.qtext = $('#qs').value;
-  QS = qs;
-  for (let i = 0; i < 20; i++) {
-    const c = String(1000 + Math.floor(Math.random() * 9000));
-    const { error } = await sb.from('lq_games').insert({ code: c, state: { phase: 'lobby' } });
-    if (!error) { code = c; break; }
-  }
-  if (!code) return $('#err').textContent = 'Could not create the game. Check your Supabase setup.';
-  await sync(); listen();
-}
-const setState = s => { stH = s; return sb.from('lq_games').update({ state: s }).eq('code', code); };
-const zero = () => sb.from('lq_players').update({ score: 0, pts: 0, choice: -1 }).eq('code', code);
-
-async function startQuiz() { await zero(); qiH = -1; next(); }
-async function next() {
-  const i = ++qiH;
-  if (i >= QS.length) return setState({ phase: 'done' });
-  const q = QS[i];
-  await sb.from('lq_answers').delete().eq('code', code);
-  const start = await srv();
-  await setState({ phase: 'question', qi: i, total: QS.length, q: q.q, opts: q.o, start });
-  timer = setTimeout(reveal, Math.max(0, start + QTIME + 700 - (Date.now() + off)));
-}
-async function reveal() {
-  const q = QS[qiH], start = stH.start;
-  const [p, a] = await Promise.all([
-    sb.from('lq_players').select('*').eq('code', code),
-    sb.from('lq_answers').select('*').eq('code', code)]);
-  const ans = Object.fromEntries((a.data || []).map(x => [x.pid, x]));
-  const rows = (p.data || []).map(pl => {
-    const x = ans[pl.id]; let pts = 0, ch = -1;
-    if (x) {
-      ch = x.choice;
-      const t = Number(x.at) - start;
-      if (ch === q.c && t <= QTIME + 800)
-        pts = Math.round(MAXPTS - (MAXPTS - MINPTS) * Math.min(Math.max(t, 0), QTIME) / QTIME);
-    }
-    return { ...pl, score: pl.score + pts, pts, choice: ch };
-  });
-  if (rows.length) await sb.from('lq_players').upsert(rows);
-  await setState({ ...stH, phase: 'reveal', correct: q.c });
-  timer = setTimeout(next, REVEAL);
-}
-async function again() {
-  clearTimeout(timer); qiH = -1;
-  await zero();
-  await sb.from('lq_answers').delete().eq('code', code);
-  setState({ phase: 'lobby' });
-}
-
-/* ---------- player actions ---------- */
 async function join() {
   const c = $('#cd').value.trim(), n = $('#nm').value.trim().slice(0, 20) || 'Guest';
   const g = await sb.from('lq_games').select('code').eq('code', c).maybeSingle();
@@ -138,79 +16,58 @@ async function join() {
   const taken = ((await sb.from('lq_players').select('name').eq('code', c)).data || []).map(p => p.name);
   let name = n, k = 2;
   while (taken.includes(name)) name = n + ' ' + k++;
-  pid = Math.random().toString(36).slice(2, 10); code = c;
-  const { error } = await sb.from('lq_players').insert({ id: pid, code, name, score: 0, pts: 0, choice: -1 });
+  pid = Math.random().toString(36).slice(2, 10);
+  const { error } = await sb.from('lq_players').insert({ id: pid, code: c, name });
   if (error) return $('#err').textContent = 'Could not join. Try again.';
-  localStorage.qsess = JSON.stringify({ code, pid });
-  await sync(); listen();
+  localStorage.qsess = JSON.stringify({ code: c, pid });
+  await sync(); listen(c, draw);
 }
 function ans(i) {
-  sb.from('lq_answers').insert({ code, pid, choice: i }).then(() => {});
+  sb.from('lq_answers').insert({ code: S.code, pid, choice: i }).then(() => {});
   lock(i);
 }
-function lock(i) {
-  document.querySelectorAll('button.o').forEach((b, j) => { b.disabled = true; if (j !== i) b.classList.add('dim'); });
-}
-Object.assign(window, { create, startQuiz, again, join, ans });
+function lock(i) { document.querySelectorAll('button.o').forEach((b, j) => { b.disabled = true; if (j !== i) b.classList.add('dim'); }); }
+$('#app').onclick = e => {
+  const b = e.target.closest('[data-i]');
+  if (b && !b.disabled) ans(+b.dataset.i);
+  if (e.target.id === 'go') join();
+};
 
-/* ---------- screens ---------- */
 function draw() {
-  if (code && !loaded) return;
-  const s = G.state || { phase: 'none' };
-  const role = host ? (code ? 'H' : 'S') : (pid && G.players && G.players[pid] ? 'P' : 'J');
-  const k = role + s.phase + s.qi;
-  if (k !== last) { last = k; build(role, s); }
-  upd(role, s);
+  if (S.code && !S.loaded) return;
+  const s = S.G.state || { phase: 'none' }, me = S.G.players && S.G.players[pid];
+  const k = (me ? 'P' : 'J') + s.phase + s.qi;
+  if (k !== last) { last = k; build(me, s); }
+  upd(me, s);
 }
-function build(role, s) {
+function build(me, s) {
   const p = s.phase; let h = '';
-  if (role === 'S') h = '<h1>Host a quiz</h1><div class="card"><b>Questions</b>, one per line:<br>question | option | option | ... | number of the correct option<textarea id="qs">' + esc(localStorage.qtext || sample) + '</textarea><button onclick="create()">Create game</button><div id="err" class="err"></div></div>';
-  else if (role === 'J') h = '<h1>Join the quiz</h1><div class="card"><input id="cd" inputmode="numeric" maxlength="4" placeholder="Game code"><input id="nm" maxlength="20" placeholder="Your name" autocomplete="off"><button onclick="join()">Join</button><div id="err" class="err"></div></div>';
-  else if (p === 'lobby') h = role === 'H'
-    ? '<h1>Join at ' + esc(location.host) + '</h1><div class="code">' + code + '</div><div class="card" id="names"></div><button onclick="startQuiz()">Start quiz</button>'
-    : '<h1>You are in, ' + esc(G.players[pid].name) + '.</h1><p>Waiting for the host to start the quiz.</p>';
+  if (!me) h = `<div class="card pop"><h2>Join the game</h2><input id="cd" inputmode="numeric" maxlength="4" placeholder="Game code" value="${esc(S.code || '')}"><input id="nm" maxlength="20" placeholder="Your name" autocomplete="off"><button id="go">Join</button><p id="err" class="err"></p></div>`;
+  else if (p === 'lobby') h = `<div class="card pop center"><h2>You are in, ${esc(me.name)}!</h2><p>Waiting for the host to start. Get your thumbs ready.</p></div><div class="card"><b>Players</b><div id="lb"></div></div>`;
   else if (p === 'question' || p === 'reveal') {
-    const O = s.opts.map((t, i) => (role === 'H' || p === 'reveal')
-      ? '<div class="o o' + i + (p === 'reveal' && i !== s.correct ? ' dim' : '') + '">' + 'ABCD'[i] + '. ' + esc(t) + '</div>'
-      : '<button class="o o' + i + '" onclick="ans(' + i + ')">' + 'ABCD'[i] + '. ' + esc(t) + '</button>').join('');
-    h = '<div class="head"><span>Question ' + (s.qi + 1) + ' of ' + s.total + '</span><span id="cnt"></span></div><div class="bar"><i id="bar"></i></div><h1>' + esc(s.q) + '</h1><div class="opts">' + O + '</div><div class="msg" id="msg"></div><div class="card"><b>Leaderboard</b><div id="lb"></div></div>';
-  } else if (p === 'done') h = '<h1>Final results</h1><div class="msg" id="msg"></div><div class="card"><div id="lb"></div></div>' + (role === 'H' ? '<button onclick="again()">Play again</button>' : '');
-  else h = '<h1>Loading</h1>';
+    const O = s.opts.map((t, i) => p === 'reveal'
+      ? `<div class="o o${i} ${i === s.correct ? 'good' : 'dim'}"><b>${A[i]}</b>${esc(t)}</div>`
+      : `<button class="o o${i}" data-i="${i}"><b>${A[i]}</b>${esc(t)}</button>`).join('');
+    h = `<div class="head"><span>Question ${s.qi + 1} of ${s.total}</span><span id="cnt"></span></div><div class="bar"><i id="bar"></i></div><h1 class="pop">${esc(s.q)}</h1><div class="opts">${O}</div><div class="msg" id="msg"></div><div class="card"><b>Leaderboard</b><div id="lb"></div></div>`;
+  } else if (p === 'done') h = '<div class="card pop center"><h2>Final results</h2><div class="msg" id="msg"></div></div><div class="card"><div id="lb"></div></div>';
+  else h = '<div class="card center">The game is not running.</div>';
   $('#app').innerHTML = h;
 }
-function upd(role, s) {
-  const p = s.phase, set_ = (q, t) => { const e = $(q); if (e) e.textContent = t; };
-  const list = players(), me = G.players && G.players[pid];
-  const lb = $('#lb');
-  if (lb) lb.innerHTML = list.slice(0, role === 'H' ? 10 : 5).map((x, i) => '<div class="row"><span>' + (i + 1) + '. ' + esc(x.name) + '</span><b>' + x.score + '</b></div>').join('') || 'No players yet';
-  if (p === 'lobby' && role === 'H') { const n = $('#names'); if (n) n.innerHTML = '<b>' + list.length + ' joined</b>: ' + list.map(x => esc(x.name)).join(', '); }
-  if (p === 'question') {
-    const mine = G.ans && G.ans[pid];
-    if (role === 'H') set_('#msg', Object.keys(G.ans || {}).length + ' of ' + list.length + ' have answered');
-    else if (mine) { set_('#msg', 'Answer locked in. Wait for the timer.'); lock(mine.choice); }
+function upd(me, s) {
+  const set = (q, t) => { const e = $(q); if (e) e.textContent = t; };
+  const lb = $('#lb'); if (lb) lb.innerHTML = board(5);
+  const rank = players().findIndex(x => x.id === pid) + 1;
+  if (s.phase === 'question' && me) {
+    const mine = S.G.ans && S.G.ans[pid];
+    if (mine) { set('#msg', 'Locked in. Wait for the timer.'); lock(mine.choice); }
   }
-  if (p === 'reveal') {
-    if (role === 'H') set_('#msg', 'Correct answer: ' + 'ABCD'[s.correct]);
-    else if (me) set_('#msg', (me.choice === -1 || me.choice === undefined ? 'Too slow, no answer.' : me.pts > 0 ? 'Correct! +' + me.pts + ' points' : 'Not this time.') + '  Score ' + me.score + ', rank ' + (list.findIndex(x => x.id === pid) + 1));
-  }
-  if (p === 'done' && me) set_('#msg', 'You finished #' + (list.findIndex(x => x.id === pid) + 1) + ' with ' + me.score + ' points');
+  if (s.phase === 'reveal' && me) set('#msg', (me.choice === -1 ? 'Too slow, no answer.' : me.pts > 0 ? 'Correct! +' + me.pts + ' points' : 'Not this time.') + '  Score ' + me.score + ', rank ' + rank);
+  if (s.phase === 'done' && me) set('#msg', 'You finished #' + rank + ' with ' + me.score + ' points');
 }
-setInterval(() => {
-  const s = G.state;
-  if (!s || s.phase !== 'question' || !s.start) return;
-  const t = Math.max(0, s.start + QTIME - (Date.now() + off)), b = $('#bar'), c = $('#cnt');
-  if (b) b.style.width = (100 * t / QTIME) + '%';
-  if (c) c.textContent = Math.ceil(t / 1000) + 's';
-}, 100);
-function init() {
-  if (!CONFIG.url.startsWith('https')) {
-    $('#app').innerHTML = '<h1>Almost ready</h1><div class="card">Open index.html and paste your Supabase URL and anon key at the top of the script.</div>';
-    return;
-  }
-  sb = createClient(CONFIG.url, CONFIG.key);
+if (!ready) setup('Open shared.js and paste your Supabase URL and anon key.');
+else {
   const saved = JSON.parse(localStorage.qsess || 'null');
-  if (saved && !host) { code = saved.code; pid = saved.pid; sync().then(listen); }
+  if (saved) { pid = saved.pid; sync().then(() => listen(saved.code, draw)); }
   draw();
 }
-init();
 </script></body></html>
