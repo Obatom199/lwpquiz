@@ -1,7 +1,7 @@
 import {createClient} from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/+esm";
 
 // PASTE YOUR SUPABASE SETTINGS HERE (Project settings > API). Use the anon public key only.
-export const CONFIG = { url: "PASTE_PROJECT_URL", key: "PASTE_ANON_PUBLIC_KEY" };
+export const CONFIG = { url: "https://reohhfxampitibotuwlm.supabase.co", key: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJlb2hoZnhhbXBpdGlib3R1d2xtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTMxODMxNDIsImV4cCI6MjEwODc1OTE0Mn0.LKbhrUrzABV7u6y9Pr1UmkESY0FAEVjDOan2InGdmk8" };
 export const QTIME = 12000, REVEAL = 5000, MAXPTS = 1000, MINPTS = 100;
 
 export const $ = s => document.querySelector(s);
