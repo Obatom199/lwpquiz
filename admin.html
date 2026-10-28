@@ -8,31 +8,97 @@
 <script type="module">
 import {ready,sb,S,$,esc,sync,srv,listen,board,players,setup,A,QTIME,REVEAL,MAXPTS,MINPTS} from './shared.js';
 let user = null, last = '', QS = [], qiH = -1, stH = null, timer;
-const sample = `Who built the ark? | Moses | Noah | Abraham | David | 2
-How many disciples did Jesus choose? | 7 | 10 | 12 | 40 | 3
-David defeated Goliath with a sword. | True | False | 2
-Which book comes right after Psalms? | Proverbs | Job | Isaiah | Genesis | 1`;
+let QL = [], title = '', qid = null, lib = [];
+const blank = () => ({ q: '', o: ['', '', '', ''], c: 0 });
+const pad = x => ({ q: x.q, o: [...x.o, '', '', '', ''].slice(0, 4), c: x.c });
+const draft = () => localStorage.qdraft = JSON.stringify({ title, qid, QL });
+const msg = t => { const e = $('#err'); if (e) e.textContent = t; };
+try { const d = JSON.parse(localStorage.qdraft || 'null'); if (d) { title = d.title || ''; qid = d.qid || null; QL = d.QL || []; } } catch {}
+if (!QL.length) QL = [blank()];
+
+function clean() {
+  const qs = [];
+  for (let n = 0; n < QL.length; n++) {
+    const x = QL[n];
+    if (!x.q.trim() && x.o.every(t => !t.trim())) continue;
+    const o = []; let c = -1;
+    x.o.forEach((t, j) => { if (t.trim()) { if (j === x.c) c = o.length; o.push(t.trim()); } });
+    if (!x.q.trim() || o.length < 2 || c < 0)
+      return { err: 'Question ' + (n + 1) + ' needs a question, at least two options, and a correct answer picked from a filled option.' };
+    qs.push({ q: x.q.trim(), o, c });
+  }
+  return qs.length ? { qs } : { err: 'Add at least one question first.' };
+}
+function parse(text) {
+  const qs = text.split('\n').map(l => l.trim()).filter(Boolean).map(l => {
+    const p = l.split('|').map(s => s.trim()), c = parseInt(p.pop()) - 1;
+    return { q: p[0], o: p.slice(1), c };
+  });
+  return qs.length && !qs.some(x => !x.q || x.o.length < 2 || x.o.length > 4 || !(x.c >= 0 && x.c < x.o.length)) ? qs : null;
+}
+function renderEd() {
+  $('#ed').innerHTML = QL.map((x, i) => `<div class="card qcard"><div class="head"><b>Question ${i + 1}</b><button class="ghost sm" data-act="delq" data-i="${i}">Remove</button></div><input data-i="${i}" data-f="q" maxlength="160" placeholder="Type your question" value="${esc(x.q)}">${x.o.map((t, j) => `<div class="orow"><input type="radio" name="c${i}" data-i="${i}" data-f="c" value="${j}" ${x.c === j ? 'checked' : ''} aria-label="Correct answer ${A[j]}"><input data-i="${i}" data-f="o${j}" maxlength="80" placeholder="Option ${A[j]}${j > 1 ? ' (optional)' : ''}" value="${esc(t)}"></div>`).join('')}</div>`).join('');
+}
+async function loadLib() {
+  const { data } = await sb.from('lq_quizzes').select('id,title,questions').order('created_at', { ascending: false });
+  lib = data || [];
+  const e = $('#lib'); if (!e) return;
+  e.innerHTML = (lib.map((z, i) => `<div class="row"><span>${esc(z.title)} <small class="hint">${z.questions.length} questions</small></span><span><button class="ghost sm" data-act="open" data-i="${i}">Open</button><button class="ghost sm" data-act="del" data-i="${i}">Delete</button></span></div>`).join('') || '<p class="hint">No saved quizzes yet.</p>') + '<button class="ghost" data-act="newq">New quiz</button>';
+}
+async function drawQR() {
+  const el = $('#qr'); if (!el) return;
+  const url = new URL('./?c=' + S.code, location.href).href;
+  try {
+    const m = await import('https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/+esm');
+    const qr = (m.default || m)(0, 'M'); qr.addData(url); qr.make();
+    const n = qr.getModuleCount(), g = 2; let d = '';
+    for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (qr.isDark(r, c)) d += `M${c + g},${r + g}h1v1h-1z`;
+    el.innerHTML = `<svg viewBox="0 0 ${n + 2 * g} ${n + 2 * g}" xmlns="http://www.w3.org/2000/svg" shape-rendering="crispEdges" role="img" aria-label="QR code to join"><rect width="100%" height="100%" fill="#fff"/><path d="${d}" fill="#111"/></svg>`;
+  } catch { el.innerHTML = '<p class="hint">The QR code could not load. Use the game code instead.</p>'; }
+}
 
 const acts = {
   async login() {
     const { error } = await sb.auth.signInWithPassword({ email: $('#em').value.trim(), password: $('#pw').value });
-    if (error) return $('#err').textContent = error.message;
+    if (error) return msg(error.message);
     boot();
   },
   async out() { await sb.auth.signOut(); location.reload(); },
   ai() { gen(false); },
   surprise() { gen(true); },
+  addq() { QL.push(blank()); renderEd(); draft(); },
+  delq(i) { QL.splice(i, 1); if (!QL.length) QL.push(blank()); renderEd(); draft(); },
+  imp() {
+    const qs = parse($('#qp').value);
+    if (!qs) return msg('Check the format: question | option | option | number of the correct option');
+    QL = qs.map(pad); $('#qp').value = ''; renderEd(); draft(); msg('Imported. Check the questions above.');
+  },
+  async save() {
+    const r = clean(); if (r.err) return msg(r.err);
+    title = ($('#ti').value || '').trim() || 'Untitled quiz';
+    const row = { title, questions: r.qs };
+    const { data, error } = await (qid ? sb.from('lq_quizzes').update(row).eq('id', qid) : sb.from('lq_quizzes').insert(row)).select('id').single();
+    if (error) return msg(error.message);
+    qid = data.id; draft(); msg('Saved.'); loadLib();
+  },
+  open(i) { const z = lib[i]; QL = z.questions.map(pad); title = z.title; qid = z.id; draft(); last = ''; draw(); },
+  async del(i) {
+    if (!confirm('Delete this quiz?')) return;
+    await sb.from('lq_quizzes').delete().eq('id', lib[i].id);
+    if (qid === lib[i].id) qid = null;
+    loadLib();
+  },
+  newq() { QL = [blank()]; title = ''; qid = null; draft(); last = ''; draw(); },
   async create() {
-    const qs = parse($('#qs').value);
-    if (!qs) return $('#err').textContent = 'Check each line: question | option | option | number of the correct option';
-    localStorage.qtext = $('#qs').value; QS = qs;
+    const r = clean(); if (r.err) return msg(r.err);
+    QS = r.qs; draft();
     let code = '';
     for (let i = 0; i < 20 && !code; i++) {
       const c = String(1000 + Math.floor(Math.random() * 9000));
       const { error } = await sb.from('lq_games').insert({ code: c, state: { phase: 'lobby' } });
       if (!error) code = c;
     }
-    if (!code) return $('#err').textContent = 'Could not create the game. Check your Supabase setup and that you are logged in.';
+    if (!code) return msg('Could not create the game. Check your Supabase setup and that you are logged in.');
     await sync(); listen(code, draw);
   },
   async start() { await zero(); qiH = -1; next(); },
@@ -43,15 +109,13 @@ const acts = {
   },
   fresh() { clearTimeout(timer); S.code = ''; S.G = {}; last = ''; draw(); }
 };
-$('#app').onclick = e => { const a = e.target.closest('[data-act]'); if (a && !a.disabled) acts[a.dataset.act](); };
-
-function parse(text) {
-  const qs = text.split('\n').map(l => l.trim()).filter(Boolean).map(l => {
-    const p = l.split('|').map(s => s.trim()), c = parseInt(p.pop()) - 1;
-    return { q: p[0], o: p.slice(1), c };
-  });
-  return qs.length && !qs.some(x => !x.q || x.o.length < 2 || x.o.length > 4 || !(x.c >= 0 && x.c < x.o.length)) ? qs : null;
-}
+$('#app').onclick = e => { const a = e.target.closest('[data-act]'); if (a && !a.disabled) acts[a.dataset.act](+a.dataset.i); };
+$('#app').oninput = e => {
+  const t = e.target, f = t.dataset.f; if (!f) return;
+  if (f === 't') title = t.value;
+  else { const x = QL[+t.dataset.i]; if (f === 'q') x.q = t.value; else if (f === 'c') x.c = +t.value; else x.o[+f[1]] = t.value; }
+  draft();
+};
 async function gen(surprise) {
   const st = $('#ai'), btns = document.querySelectorAll('[data-act=ai],[data-act=surprise]');
   btns.forEach(b => b.disabled = true); st.textContent = 'Writing your quiz...';
@@ -61,8 +125,9 @@ async function gen(surprise) {
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + data.session.access_token },
       body: JSON.stringify({ topic: surprise ? '' : $('#tp').value, count: $('#ct').value, level: $('#lv').value }) });
     const j = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(j.error || 'The AI helper is not set up yet.');
-    $('#qs').value = j.text; st.textContent = 'Done. Read through the questions and edit anything before creating the game.';
+    if (!r.ok) throw new Error(j.error || 'The AI helper is not set up yet. You can still type your questions.');
+    const qs = parse(j.text || ''); if (!qs) throw new Error('The AI reply could not be read. Try again.');
+    QL = qs.map(pad); renderEd(); draft(); st.textContent = 'Done. Check the questions below and edit anything.';
   } catch (e) { st.textContent = e.message; }
   btns.forEach(b => b.disabled = false);
 }
@@ -110,13 +175,15 @@ function draw() {
 function build(role, s) {
   const p = s.phase; let h = '';
   if (role === 'L') h = '<div class="card pop"><h2>Admin login</h2><input id="em" type="email" placeholder="Email" autocomplete="username"><input id="pw" type="password" placeholder="Password" autocomplete="current-password"><button data-act="login">Log in</button><p id="err" class="err"></p></div>';
-  else if (role === 'S') h = `<div class="card pop"><h2>AI quiz maker</h2><p class="hint">Type a topic, or let the AI surprise you. You can edit every question afterwards.</p><input id="tp" maxlength="200" placeholder="Topic, e.g. Book of Ruth, Women of the Bible, Parables"><div class="row2"><select id="ct"><option>5</option><option selected>10</option><option>15</option></select><select id="lv"><option>Easy</option><option selected>Medium</option><option>Hard</option></select></div><div class="row2"><button class="ai" data-act="ai">Generate with AI</button><button class="ai" data-act="surprise">Surprise me</button></div><p id="ai" class="hint"></p></div><div class="card"><h2>Questions</h2><p class="hint">One per line: question | option | option | ... | number of the correct option</p><textarea id="qs">${esc(localStorage.qtext || sample)}</textarea><button data-act="create">Create game</button><p id="err" class="err"></p><button class="ghost" data-act="out">Log out</button></div>`;
-  else if (p === 'lobby') h = `<div class="card center pop"><div class="tag">Players go to ${esc(location.host)} and enter</div><div class="code">${S.code}</div></div><div class="card" id="names"></div><button data-act="start">Start quiz</button><button class="ghost" data-act="fresh">Back to setup</button>`;
+  else if (role === 'S') h = `<div class="card pop"><h2>My quizzes</h2><div id="lib" class="hint">Loading...</div></div><div class="card"><h2>Quiz editor</h2><input id="ti" data-f="t" maxlength="80" placeholder="Quiz title, e.g. Bible Trivia Night" value="${esc(title)}"><p class="hint">Type your questions below and tick the circle beside the correct answer. Leave options C and D empty for true or false.</p></div><div id="ed"></div><button class="ghost" data-act="addq">+ Add question</button><div class="card"><h2>AI helper (optional)</h2><input id="tp" maxlength="200" placeholder="Topic, e.g. Book of Ruth, Parables, Women of the Bible"><div class="row2"><select id="ct" aria-label="Number of questions"><option>5</option><option selected>10</option><option>15</option></select><select id="lv" aria-label="Difficulty"><option>Easy</option><option selected>Medium</option><option>Hard</option></select></div><div class="row2"><button class="ai" data-act="ai">Generate with AI</button><button class="ai" data-act="surprise">Surprise me</button></div><p id="ai" class="hint"></p></div><details class="card"><summary>Quick paste (many questions at once)</summary><p class="hint">One per line: question | option | option | ... | number of the correct option</p><textarea id="qp"></textarea><button class="ghost" data-act="imp">Import into editor</button></details><div class="row2"><button class="ghost" data-act="save">Save quiz</button><button data-act="create">Start game</button></div><p id="err" class="err"></p><button class="ghost" data-act="out">Log out</button>`;
+  else if (p === 'lobby') h = `<div class="card pop lobby"><div class="qr" id="qr"></div><div class="center"><div class="tag">Scan the QR code, or go to ${esc(location.host)} and enter</div><div class="code">${S.code}</div></div></div><div class="card" id="names"></div><button data-act="start">Start quiz</button><button class="ghost" data-act="fresh">Back to editor</button>`;
   else if (p === 'question' || p === 'reveal') {
     const O = s.opts.map((t, i) => `<div class="o o${i} ${p === 'reveal' ? (i === s.correct ? 'good' : 'dim') : ''}"><b>${A[i]}</b>${esc(t)}</div>`).join('');
     h = `<div class="head"><span>Question ${s.qi + 1} of ${s.total}</span><span id="cnt"></span></div><div class="bar"><i id="bar"></i></div><h1 class="pop">${esc(s.q)}</h1><div class="opts">${O}</div><div class="msg" id="msg"></div><div class="card"><b>Leaderboard</b><div id="lb"></div></div>`;
   } else if (p === 'done') h = '<div class="card center pop"><h2>Final results</h2></div><div class="card"><div id="lb"></div></div><button data-act="again">Play again</button><button class="ghost" data-act="fresh">New quiz</button>';
   $('#app').innerHTML = h;
+  if (role === 'S') { renderEd(); loadLib(); }
+  if (role === 'G' && p === 'lobby') drawQR();
 }
 function upd(s) {
   const lb = $('#lb'); if (lb) lb.innerHTML = board(10);
